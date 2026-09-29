@@ -47,6 +47,8 @@ PIXELS_PER_MM_BY_CAMERA = {
     "Z": 63.2,
 }
 
+TOF_PARAMETER_RESULTS_BASENAME = "tof_parameter_scan_results"
+
 
 def main() -> None:
     path_list_file = DEFAULT_DATA_ROOT / PATH_LIST_FILENAME
@@ -184,6 +186,168 @@ def parse_settings(metadata: dict) -> dict:
         "scan_min_ms": float(scan["min_val"]),
         "scan_max_ms": float(scan["max_val"]),
     }
+
+
+def get_scanned_variables(metadata: dict) -> list[dict]:
+    """Return scanned variables sorted by Dim when available."""
+    scanned_variables = metadata.get("scanned_variables", [])
+    if not scanned_variables:
+        return []
+
+    try:
+        return sorted(scanned_variables, key=lambda item: int(item.get("Dim", 0)))
+    except Exception:
+        return list(scanned_variables)
+
+
+def build_scan_axes(scanned_variables: list[dict]) -> list[np.ndarray]:
+    """Create one coordinate axis per scanned variable."""
+    axes: list[np.ndarray] = []
+    for variable in scanned_variables:
+        steps = int(variable["num_scan_steps"])
+        axes.append(np.linspace(float(variable["min_val"]), float(variable["max_val"]), steps))
+    return axes
+
+
+def find_tof_scan_index(scanned_variables: list[dict]) -> int:
+    """Find the TOF scan dimension from scanned variable names."""
+    preferred_names = {"tof"}
+    for index, variable in enumerate(scanned_variables):
+        name = str(variable.get("name", "")).strip().lower()
+        if name in preferred_names:
+            return index
+
+    return -1
+
+
+def save_parameter_scan_outputs(
+    directory: Path,
+    scanned_variables: list[dict],
+    scan_axes: list[np.ndarray],
+    tof_axis_index: int,
+    actual_runs: int,
+    sigma0_tensor: np.ndarray,
+    temperature_tensor: np.ndarray,
+    weighted_r2_tensor: np.ndarray,
+    chi2_red_tensor: np.ndarray,
+    sigma_mean_tensor: np.ndarray,
+    sigma_sem_tensor: np.ndarray,
+) -> None:
+    """Persist TOF parameter-sweep results for plotting without reprocessing images."""
+    output_npz = directory / f"{TOF_PARAMETER_RESULTS_BASENAME}.npz"
+    output_json = directory / f"{TOF_PARAMETER_RESULTS_BASENAME}_meta.json"
+
+    np.savez(
+        output_npz,
+        sigma0_m=np.asarray(sigma0_tensor, dtype=float),
+        temperature_K=np.asarray(temperature_tensor, dtype=float),
+        weighted_r2=np.asarray(weighted_r2_tensor, dtype=float),
+        chi2_red=np.asarray(chi2_red_tensor, dtype=float),
+        sigma_mean_m=np.asarray(sigma_mean_tensor, dtype=float),
+        sigma_sem_m=np.asarray(sigma_sem_tensor, dtype=float),
+        tof_axis=np.asarray(scan_axes[tof_axis_index], dtype=float),
+        **{f"axis_{index}": np.asarray(axis, dtype=float) for index, axis in enumerate(scan_axes)},
+    )
+
+    payload = {
+        "variable_names": [str(variable["name"]) for variable in scanned_variables],
+        "axis_lengths": [int(len(axis)) for axis in scan_axes],
+        "tof_axis_index": int(tof_axis_index),
+        "parameter_axis_indices": [int(index) for index in range(len(scan_axes)) if index != tof_axis_index],
+        "scan_dim_order": [int(variable.get("Dim", index + 1)) for index, variable in enumerate(scanned_variables)],
+        "run_count": int(actual_runs),
+        "flattening_order": "C",
+        "source": "TOF_parameter_sweep",
+    }
+    output_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(f"Saved: {output_npz.name}, {output_json.name}")
+
+
+def process_parameter_scan(
+    directory: Path,
+    fit_params: np.ndarray,
+    sigma_errors_m: np.ndarray,
+    scanned_variables: list[dict],
+) -> None:
+    """Fit TOF expansion for each non-TOF parameter combination and save the result tensors."""
+    scan_axes = build_scan_axes(scanned_variables)
+    scan_shape = tuple(int(variable["num_scan_steps"]) for variable in scanned_variables)
+    points_per_run = int(np.prod(scan_shape))
+    if points_per_run <= 0:
+        raise ValueError("Scan grid has no points")
+
+    usable_points = (fit_params.shape[0] // points_per_run) * points_per_run
+    if usable_points <= 0:
+        raise ValueError("Not enough TOF frames to build a parameter scan grid")
+    if usable_points != fit_params.shape[0]:
+        print(
+            f"Warning: {fit_params.shape[0]} fitted frames is not divisible by the scan grid size {points_per_run}; "
+            f"ignoring the last {fit_params.shape[0] - usable_points} frame(s)"
+        )
+
+    actual_runs = usable_points // points_per_run
+    if actual_runs <= 0:
+        raise ValueError("Could not infer any complete parameter-sweep run from the image stack")
+
+    fit_params = np.asarray(fit_params[:usable_points], dtype=float).reshape((actual_runs, *scan_shape, fit_params.shape[1]))
+    sigma_errors = np.asarray(sigma_errors_m[:usable_points], dtype=float).reshape((actual_runs, *scan_shape))
+
+    tof_axis_index = find_tof_scan_index(scanned_variables)
+    if tof_axis_index < 0:
+        raise ValueError(
+            "Could not identify the TOF scan variable. Expected one scanned variable named TOF, dt, or T."
+        )
+
+    sigma_tensor = np.sqrt(np.abs(fit_params[..., 3]) * np.abs(fit_params[..., 4]))
+    sigma_mean_tensor = np.mean(sigma_tensor, axis=0)
+    if actual_runs > 1:
+        sigma_sem_tensor = np.std(sigma_tensor, axis=0, ddof=1) / np.sqrt(actual_runs)
+    else:
+        sigma_sem_tensor = np.squeeze(sigma_errors, axis=0)
+
+    parameter_axis_indices = [index for index in range(len(scan_shape)) if index != tof_axis_index]
+    parameter_shape = tuple(scan_shape[index] for index in parameter_axis_indices)
+    sigma0_tensor = np.full(parameter_shape, np.nan, dtype=float)
+    temperature_tensor = np.full(parameter_shape, np.nan, dtype=float)
+    weighted_r2_tensor = np.full(parameter_shape, np.nan, dtype=float)
+    chi2_red_tensor = np.full(parameter_shape, np.nan, dtype=float)
+
+    tof_axis_s = np.asarray(scan_axes[tof_axis_index], dtype=float) * 1e-3
+    fitter = fitting.TRFLSQFitter()
+
+    for parameter_index in np.ndindex(parameter_shape):
+        slicer = [slice(None)] * len(scan_shape)
+        for parameter_axis_position, scan_axis_index in enumerate(parameter_axis_indices):
+            slicer[scan_axis_index] = parameter_index[parameter_axis_position]
+
+        sigma_curve = np.asarray(sigma_mean_tensor[tuple(slicer)], dtype=float)
+        sigma_err_curve = np.asarray(sigma_sem_tensor[tuple(slicer)], dtype=float)
+
+        try:
+            model_fit = fit_tof_component(tof_axis_s, sigma_curve, sigma_err_curve, fitter)
+            sigma0_tensor[parameter_index] = float(model_fit.sigma0.value)
+            temperature_tensor[parameter_index] = float(model_fit.T.value)
+
+            sigma_pred = np.asarray(model_fit(tof_axis_s), dtype=float)
+            w_r2, chi2_red = compute_weighted_fit_quality(sigma_curve, sigma_pred, sigma_err_curve, n_params=2)
+            weighted_r2_tensor[parameter_index] = float(w_r2)
+            chi2_red_tensor[parameter_index] = float(chi2_red)
+        except Exception as exc:
+            print(f"Warning: TOF fit failed for parameter index {parameter_index}: {exc}")
+
+    save_parameter_scan_outputs(
+        directory=directory,
+        scanned_variables=scanned_variables,
+        scan_axes=scan_axes,
+        tof_axis_index=tof_axis_index,
+        actual_runs=actual_runs,
+        sigma0_tensor=sigma0_tensor,
+        temperature_tensor=temperature_tensor,
+        weighted_r2_tensor=weighted_r2_tensor,
+        chi2_red_tensor=chi2_red_tensor,
+        sigma_mean_tensor=sigma_mean_tensor,
+        sigma_sem_tensor=sigma_sem_tensor,
+    )
 
 
 def sort_tif_files(directory: Path) -> list[Path]:
@@ -541,6 +705,7 @@ def process_directory(directory: Path) -> None:
         metadata = json.load(file)
 
     settings = parse_settings(metadata)
+    scanned_variables = get_scanned_variables(metadata)
     print(f"Processing {directory}")
     print(f"Using metadata file: {metadata_file.name}")
     print(f"Downsampling factor: {FIT_DOWNSAMPLING_FACTOR}")
@@ -558,6 +723,11 @@ def process_directory(directory: Path) -> None:
         pixels_per_mm=settings["pixels_per_mm"],
         initial_center_px=settings["roi_center_px"],
     )
+
+    if len(scanned_variables) > 1:
+        print(f"Detected multi-parameter scan with {len(scanned_variables)} scanned variables")
+        process_parameter_scan(directory, fit_params, sigma_errors_m, scanned_variables)
+        return
 
     atom_numbers = run_atom_number_subprocess(directory)
     if atom_numbers.size <= 0:

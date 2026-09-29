@@ -7,11 +7,13 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from astropy.modeling.models import custom_model
+from matplotlib.widgets import Slider
 
 
 DEFAULT_DATA_ROOT = Path(r"G:\Experimental Data\Hybrid\MOT_images")
 PATH_LIST_FILENAME = "path_list.txt"
 INCLUDE_CLOUD_Y_PLOT = False
+PARAMETER_SCAN_RESULTS_BASENAME = "tof_parameter_scan_results"
 
 
 def main() -> None:
@@ -25,6 +27,13 @@ def main() -> None:
 
             with metadata_file.open("r", encoding="utf-8") as file:
                 metadata = json.load(file)
+
+            parameter_npz = directory / f"{PARAMETER_SCAN_RESULTS_BASENAME}.npz"
+            parameter_meta = directory / f"{PARAMETER_SCAN_RESULTS_BASENAME}_meta.json"
+            if parameter_npz.exists() and parameter_meta.exists():
+                print(f"Plotting parameter sweep results for {directory}")
+                plot_parameter_scan_results(directory, metadata, parameter_npz, parameter_meta)
+                continue
 
             scanned_variables = get_scanned_variables(metadata)
             scan_info = scanned_variables[0]
@@ -526,6 +535,281 @@ def plot_cloud_position(
     bbox = {"boxstyle": "round", "fc": "blanchedalmond", "ec": "orange", "alpha": 0.5}
     if info_text:
         ax.text(0.98, 0.05, info_text, bbox=bbox, transform=ax.transAxes, ha="right", va="bottom")
+
+
+def build_parameter_info_text(metadata: dict) -> str:
+    """Build a short annotation for parameter-sweep plots."""
+    experiment_name = metadata.get("experimental_data", {}).get("experiment_name", "")
+    comment = metadata.get("experimental_data", {}).get("comment", "")
+    scanned_variables = get_scanned_variables(metadata)
+    parameter_names = [str(variable.get("name", "")) for variable in scanned_variables]
+
+    lines = []
+    if experiment_name:
+        lines.append(str(experiment_name))
+    if comment:
+        lines.append(str(comment))
+    if parameter_names:
+        lines.append("params: " + ", ".join(parameter_names))
+    return "\n".join(lines)
+
+
+def load_parameter_scan_results(
+    parameter_npz: Path,
+    parameter_meta: Path,
+) -> tuple[np.ndarray, np.ndarray, list[np.ndarray], list[str], dict]:
+    """Load parameter-sweep TOF fit outputs from disk."""
+    payload = np.load(parameter_npz)
+    meta = json.loads(parameter_meta.read_text(encoding="utf-8"))
+
+    sigma0 = np.asarray(payload["sigma0_m"], dtype=float)
+    temperature = np.asarray(payload["temperature_K"], dtype=float)
+    parameter_indices = [int(index) for index in meta.get("parameter_axis_indices", [])]
+    axes = [np.asarray(payload[f"axis_{index}"], dtype=float) for index in parameter_indices]
+
+    variable_names = [str(name) for name in meta.get("variable_names", [])]
+    parameter_names = [variable_names[index] if index < len(variable_names) else f"axis_{index}" for index in parameter_indices]
+
+    return sigma0, temperature, axes, parameter_names, meta
+
+
+def save_parameter_scan_figure(directory: Path, fig) -> Path:
+    """Save the parameter-sweep summary figure alongside the TOF analysis images."""
+    try:
+        date_str = directory.parent.parent.name
+        time_str = directory.parent.name
+        dt = datetime.strptime(f"{date_str}_{time_str}", "%Y_%m_%d_%H_%M_%S")
+        data_timestamp = dt.strftime("%Y%m%d_%H%M%S")
+    except Exception:
+        data_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    output_path = directory.parents[2] / "images" / f"tof_parameter_summary_{data_timestamp}.png"
+    output_path.parent.mkdir(exist_ok=True)
+    fig.savefig(output_path, dpi=150)
+    print(f"Saved figure: {output_path}")
+    return output_path
+
+
+def plot_parameter_scan_1d(
+    fig,
+    width_ax,
+    temperature_ax,
+    axis: np.ndarray,
+    sigma0: np.ndarray,
+    temperature: np.ndarray,
+    axis_name: str,
+    info_text: str,
+) -> None:
+    """Plot initial width and temperature as 1D line plots."""
+    width_ax.plot(axis, sigma0 * 1e3, "-o", ms=4, lw=1, label="Initial width")
+    width_ax.set_ylabel("Initial width sigma_0 (mm)")
+    width_ax.set_xlabel(axis_name)
+    width_ax.minorticks_on()
+    width_ax.grid(True, which="both", alpha=0.35)
+    width_ax.legend()
+
+    temperature_ax.plot(axis, temperature * 1e6, "-o", ms=4, lw=1, color="tab:orange", label="Temperature")
+    temperature_ax.set_ylabel("Temperature (uK)")
+    temperature_ax.set_xlabel(axis_name)
+    temperature_ax.minorticks_on()
+    temperature_ax.grid(True, which="both", alpha=0.35)
+    temperature_ax.legend()
+
+    bbox = {"boxstyle": "round", "fc": "blanchedalmond", "ec": "orange", "alpha": 0.5}
+    if info_text:
+        width_ax.text(0.98, 0.05, info_text, bbox=bbox, transform=width_ax.transAxes, ha="right", va="bottom")
+
+
+def plot_parameter_scan_2d(
+    fig,
+    width_ax,
+    temperature_ax,
+    x_axis: np.ndarray,
+    y_axis: np.ndarray,
+    sigma0_grid: np.ndarray,
+    temperature_grid: np.ndarray,
+    x_name: str,
+    y_name: str,
+    info_text: str,
+) -> None:
+    """Plot parameter sweeps as two 2D heatmaps."""
+    extent = [float(np.min(x_axis)), float(np.max(x_axis)), float(np.min(y_axis)), float(np.max(y_axis))]
+
+    sigma_image = np.asarray(sigma0_grid, dtype=float).T * 1e3
+    temp_image = np.asarray(temperature_grid, dtype=float).T * 1e6
+
+    im0 = width_ax.imshow(sigma_image, origin="lower", aspect="auto", extent=extent, interpolation="nearest")
+    width_ax.set_xlabel(x_name)
+    width_ax.set_ylabel(y_name)
+    width_ax.set_title("Initial width sigma_0 (mm)")
+    plt.colorbar(im0, ax=width_ax, label="sigma_0 (mm)")
+
+    im1 = temperature_ax.imshow(temp_image, origin="lower", aspect="auto", extent=extent, interpolation="nearest")
+    temperature_ax.set_xlabel(x_name)
+    temperature_ax.set_ylabel(y_name)
+    temperature_ax.set_title("Temperature (uK)")
+    plt.colorbar(im1, ax=temperature_ax, label="Temperature (uK)")
+
+    bbox = {"boxstyle": "round", "fc": "blanchedalmond", "ec": "orange", "alpha": 0.5}
+    if info_text:
+        width_ax.text(0.98, 0.05, info_text, bbox=bbox, transform=width_ax.transAxes, ha="right", va="bottom")
+
+
+def plot_parameter_scan_3d_slider(
+    fig,
+    width_ax,
+    temperature_ax,
+    x_axis: np.ndarray,
+    y_axis: np.ndarray,
+    z_axis: np.ndarray,
+    sigma0_cube: np.ndarray,
+    temperature_cube: np.ndarray,
+    x_name: str,
+    y_name: str,
+    z_name: str,
+    info_text: str,
+) -> None:
+    """Plot parameter sweeps as 2D heatmaps with a slider over the third variable."""
+    extent = [float(np.min(x_axis)), float(np.max(x_axis)), float(np.min(y_axis)), float(np.max(y_axis))]
+    sigma_vmin = float(np.nanmin(np.asarray(sigma0_cube, dtype=float))) * 1e3
+    sigma_vmax = float(np.nanmax(np.asarray(sigma0_cube, dtype=float))) * 1e3
+    temp_vmin = float(np.nanmin(np.asarray(temperature_cube, dtype=float))) * 1e6
+    temp_vmax = float(np.nanmax(np.asarray(temperature_cube, dtype=float))) * 1e6
+
+    sigma_image_0 = np.asarray(sigma0_cube[:, :, 0], dtype=float).T * 1e3
+    temp_image_0 = np.asarray(temperature_cube[:, :, 0], dtype=float).T * 1e6
+
+    sigma_mesh = width_ax.imshow(
+        sigma_image_0,
+        origin="lower",
+        aspect="auto",
+        extent=extent,
+        interpolation="nearest",
+        vmin=sigma_vmin,
+        vmax=sigma_vmax,
+    )
+    width_ax.set_xlabel(x_name)
+    width_ax.set_ylabel(y_name)
+    width_ax.set_title(f"Initial width sigma_0 (mm), {z_name} = {z_axis[0]:.6g}")
+    plt.colorbar(sigma_mesh, ax=width_ax, label="sigma_0 (mm)")
+
+    temp_mesh = temperature_ax.imshow(
+        temp_image_0,
+        origin="lower",
+        aspect="auto",
+        extent=extent,
+        interpolation="nearest",
+        vmin=temp_vmin,
+        vmax=temp_vmax,
+    )
+    temperature_ax.set_xlabel(x_name)
+    temperature_ax.set_ylabel(y_name)
+    temperature_ax.set_title(f"Temperature (uK), {z_name} = {z_axis[0]:.6g}")
+    plt.colorbar(temp_mesh, ax=temperature_ax, label="Temperature (uK)")
+
+    slider_axis = fig.add_axes([0.18, 0.03, 0.64, 0.035])
+    slider = Slider(
+        ax=slider_axis,
+        label=z_name,
+        valmin=0,
+        valmax=max(len(z_axis) - 1, 0),
+        valinit=0,
+        valstep=1,
+    )
+
+    def update(index_value: float) -> None:
+        index = int(index_value)
+        sigma_mesh.set_data(np.asarray(sigma0_cube[:, :, index], dtype=float).T * 1e3)
+        temp_mesh.set_data(np.asarray(temperature_cube[:, :, index], dtype=float).T * 1e6)
+        width_ax.set_title(f"Initial width sigma_0 (mm), {z_name} = {z_axis[index]:.6g}")
+        temperature_ax.set_title(f"Temperature (uK), {z_name} = {z_axis[index]:.6g}")
+        fig.canvas.draw_idle()
+
+    fig._parameter_slider = slider
+    fig._parameter_slider_axis = slider_axis
+    slider.on_changed(update)
+
+    bbox = {"boxstyle": "round", "fc": "blanchedalmond", "ec": "orange", "alpha": 0.5}
+    if info_text:
+        width_ax.text(0.98, 0.05, info_text, bbox=bbox, transform=width_ax.transAxes, ha="right", va="bottom")
+
+
+def plot_parameter_scan_results(
+    directory: Path,
+    metadata: dict,
+    parameter_npz: Path,
+    parameter_meta: Path,
+) -> None:
+    """Render parameter-sweep results based on the saved TOF fit tensors."""
+    sigma0, temperature, axes, parameter_names, _meta = load_parameter_scan_results(parameter_npz, parameter_meta)
+    info_text = build_parameter_info_text(metadata)
+
+    if len(axes) != len(parameter_names):
+        raise ValueError("Parameter axes and parameter names do not match")
+
+    if sigma0.shape != temperature.shape:
+        raise ValueError("sigma0 and temperature tensors must have the same shape")
+
+    ndim = sigma0.ndim
+    if ndim != len(axes):
+        raise ValueError(f"Expected {len(axes)}D parameter tensors, got shape {sigma0.shape}")
+
+    if ndim == 1:
+        fig, (width_ax, temperature_ax) = plt.subplots(2, 1, figsize=(14, 10), dpi=100, sharex=True)
+        fig.suptitle(str(directory))
+        maximize_figure_window(fig)
+        plot_parameter_scan_1d(
+            fig,
+            width_ax,
+            temperature_ax,
+            axes[0],
+            sigma0,
+            temperature,
+            parameter_names[0],
+            info_text,
+        )
+        fig.tight_layout(rect=(0, 0, 1, 0.98))
+    elif ndim == 2:
+        fig, (width_ax, temperature_ax) = plt.subplots(1, 2, figsize=(14, 6), dpi=100)
+        fig.suptitle(str(directory))
+        maximize_figure_window(fig)
+        plot_parameter_scan_2d(
+            fig,
+            width_ax,
+            temperature_ax,
+            axes[0],
+            axes[1],
+            sigma0,
+            temperature,
+            parameter_names[0],
+            parameter_names[1],
+            info_text,
+        )
+        fig.tight_layout(rect=(0, 0, 1, 0.98))
+    elif ndim == 3:
+        fig, (width_ax, temperature_ax) = plt.subplots(1, 2, figsize=(14, 6), dpi=100)
+        fig.subplots_adjust(bottom=0.18)
+        fig.suptitle(str(directory))
+        maximize_figure_window(fig)
+        plot_parameter_scan_3d_slider(
+            fig,
+            width_ax,
+            temperature_ax,
+            axes[0],
+            axes[1],
+            axes[2],
+            sigma0,
+            temperature,
+            parameter_names[0],
+            parameter_names[1],
+            parameter_names[2],
+            info_text,
+        )
+        fig.tight_layout(rect=(0, 0.12, 1, 0.98))
+    else:
+        raise ValueError(f"Unsupported parameter-scan dimensionality: {ndim}")
+
+    save_parameter_scan_figure(directory, fig)
 
 
 if __name__ == "__main__":
