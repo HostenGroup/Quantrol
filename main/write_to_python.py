@@ -340,7 +340,7 @@ def create_experiment(self, run_continuous = False, multiple_runs = False):
                 if faf_changed:
                     file.write(indentation + "self.urukul" + str(urukul_num) + "_ch" + str(channel_num) + ".set(frequency = (" + str(channel.frequency.for_python) + ")*MHz, amplitude = (" + str(channel.amplitude.for_python) + ")/100 , phase = (" + str(channel.phase.for_python) + ")/360)\n")
 
-                # State (on/off)
+                # State (on/off) # ONOFF
                 state_changed = True if prev_edge is None else (getattr(channel.state, 'value', None) != getattr(prev_edge.dds[index].state, 'value', None))
                 if state_changed:
                     if getattr(channel.state, 'value', 0) == 1:
@@ -417,7 +417,7 @@ def create_experiment(self, run_continuous = False, multiple_runs = False):
             # no per-variable steps: keep legacy single `step` argument
             file.write(indentation + "self.store_sample(run_index_no_warumup%s)\n" % (", " + args_str if args_str else ""))
 
-        #printing derived variable values and their arguments in terminal
+    #printing derived variable values and their arguments in terminal
     for variable in self.experiment.derived_variables: # print derived variable value and its arguments (feedback)
         args_list = variable.arguments.split(",")
         file.write('\n')
@@ -462,6 +462,7 @@ def create_experiment(self, run_continuous = False, multiple_runs = False):
     if not run_continuous:
         indentation = indentation_kernel + "    "
         file.write('\n' + indentation + 'self.print_end_exp()  # print end of experiment in the end of the run \n')
+        file.write('\n ####################################################################### \n')
 
 
         
@@ -706,6 +707,21 @@ def create_experiment(self, run_continuous = False, multiple_runs = False):
                 for indent in range(count_indent):
                     indentation = indentation[:-4] 
         
+
+        
+        #printing derived variable values and their arguments in terminal
+        for variable in self.experiment.derived_variables: # print derived variable value and its arguments (feedback)
+            args_list = variable.arguments.split(",")
+            file.write('\n')
+            file.write(f'{indentation}delay(20*ms)\n')
+            file.write(f'{indentation}print("{variable.name}:", {variable.name})\n')
+            for arg in args_list:
+                arg = arg.strip()
+                if not arg:
+                    continue
+                file.write(f'{indentation}delay(20*ms)\n')
+                file.write(f'{indentation}print("{arg}:", {arg})\n')
+
 
         # If GUI requested stop_at_end_of_sequence, check host flag and trigger go_to_edge from host
         if stop_at_end_of_sequence_flag == True:

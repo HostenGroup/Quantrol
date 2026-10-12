@@ -66,5 +66,9 @@
     "16": {
         "name": "QND composite pulse",
         "plot_x_caption": ""
+    },
+    "17": {
+        "name": "Spin Echo",
+        "plot_x_caption": ""
     }
 }
