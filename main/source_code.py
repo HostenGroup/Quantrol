@@ -35,6 +35,7 @@ import threading
 import subprocess
 import time
 import socket
+import numpy as np
 import select
 import struct
 from time import perf_counter
@@ -1658,6 +1659,8 @@ class MainWindow(QMainWindow):
             return [self.to_dict(i) for i in obj]
         if isinstance(obj, dict):
             return {k: self.to_dict(v) for k, v in obj.items()}
+        if isinstance(obj, np.generic):
+            return obj.item()
 
         # for class instances
         result = {}

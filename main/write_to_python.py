@@ -83,12 +83,6 @@ def create_experiment(self, run_continuous = False, multiple_runs = False):
     indentation = indentation[:-4]
 
 
-    #check if there are any sampled variables - need?
-    has_sampled = any(
-        channel != "0"
-        for edge in self.experiment.sequence
-        for channel in edge.sampler)
-    
     # If a varialbe is sampled, we create an array for it to store the sampled values 
     if save_sampled_box_checked_flag == True and not run_continuous:
         file.write("\n")
@@ -202,6 +196,21 @@ def create_experiment(self, run_continuous = False, multiple_runs = False):
             if variable.name != "None":
                 file.write(indentation + f"{variable.name} = self.{variable.name}[step{idx+1}]\n")
         indentation_flag += opened
+
+
+        scan_step_by_name = {variable.name: f"step{idx + 1}" for idx, variable in enumerate(self.experiment.scanned_variables) if variable.name != "None"}
+        for lookup_variable in self.experiment.lookup_variables:
+            if lookup_variable.name == "None":
+                continue
+            argument_name = str(lookup_variable.argument).strip()
+            step_name = scan_step_by_name.get(argument_name)
+
+            if step_name is None:
+                raise ValueError( f"Lookup variable '{lookup_variable.name}' uses " f"argument '{argument_name}', but that argument is " f"not a scanned variable.")
+            file.write(indentation + f"{lookup_variable.name} = " f"self.{lookup_variable.name}[{step_name}]\n")
+
+
+
     self.delta_t = 0 
 
     #flag_init is used to indicate that there is no need for a delay calculation for the first row
@@ -342,11 +351,30 @@ def create_experiment(self, run_continuous = False, multiple_runs = False):
 
                 # State (on/off) # ONOFF
                 state_changed = True if prev_edge is None else (getattr(channel.state, 'value', None) != getattr(prev_edge.dds[index].state, 'value', None))
-                if state_changed:
+                
+                if self.experiment.do_scan == True:
+                    lookup_names = {lookup_variable.name for lookup_variable in self.experiment.lookup_variables if lookup_variable.name != "None"}
+                    state_expression = str(channel.state.expression).strip()
+                    print(f"DEBUG: edge {edge_index}, channel {index}, state_expression = '{state_expression}'")
+                    
+                    if state_expression in lookup_names:
+                        file.write(indentation + f"if ({state_expression}) == 1:\n")
+                        file.write(indentation + "    " + f"self.urukul{urukul_num}_ch{channel_num}.sw.on()\n")
+                        file.write(indentation + "else:\n")
+                        file.write( indentation + "    " + f"self.urukul{urukul_num}_ch{channel_num}.sw.off()\n")
+                    elif state_changed:
+                        if getattr(channel.state, 'value', 0) == 1:
+                            file.write(indentation + "self.urukul" + str(urukul_num) + "_ch" + str(channel_num) + ".sw.on() \n")
+                        elif getattr(channel.state, 'value', 0) == 0:
+                            file.write(indentation + "self.urukul" + str(urukul_num) + "_ch" + str(channel_num) + ".sw.off() \n")
+                elif state_changed:
                     if getattr(channel.state, 'value', 0) == 1:
                         file.write(indentation + "self.urukul" + str(urukul_num) + "_ch" + str(channel_num) + ".sw.on() \n")
                     else:
                         file.write(indentation + "self.urukul" + str(urukul_num) + "_ch" + str(channel_num) + ".sw.off() \n")
+
+                                     
+                    
 
             if edge_index == 0:
                 file.write(indentation + "self.sampler0.init()\n")
@@ -488,7 +516,7 @@ def create_experiment(self, run_continuous = False, multiple_runs = False):
 
         # 1000 ns delay to avoid collision of the last edge assignment of digital channels as there is at most 8 channel changes at a given time stamp
         file.write(indentation + "delay(1000*ns)\n")
-        # If scan is needed 
+        # If scan is needed scan_step_by_name
         if self.experiment.do_scan == True and self.experiment.scanned_variables_count > 0:
             #making a scanning loop (use per-variable `num_scan_steps`)
             file.write(indentation + "#Beginning of the Scan\n")
@@ -503,6 +531,19 @@ def create_experiment(self, run_continuous = False, multiple_runs = False):
             for idx, variable in enumerate(self.experiment.scanned_variables):
                 if variable.name != "None":
                     file.write(indentation + f"{variable.name} = self.{variable.name}[step{idx+1}]\n")
+
+            scan_step_by_name = {variable.name: f"step{idx + 1}" for idx, variable in enumerate(self.experiment.scanned_variables) if variable.name != "None"}
+            for lookup_variable in self.experiment.lookup_variables:
+                if lookup_variable.name == "None":
+                    continue
+                argument_name = str(lookup_variable.argument).strip()
+                step_name = scan_step_by_name.get(argument_name)
+
+                if step_name is None:
+                    raise ValueError( f"Lookup variable '{lookup_variable.name}' uses " f"argument '{argument_name}', but that argument is " f"not a scanned variable.")
+                file.write(indentation + f"{lookup_variable.name} = " f"self.{lookup_variable.name}[{step_name}]\n")
+
+
         self.delta_t = 0 
 
         #flag_init is used to indicate that there is no need for a delay calculation for the first row
@@ -655,11 +696,30 @@ def create_experiment(self, run_continuous = False, multiple_runs = False):
 
                     # State (on/off)
                     state_changed = True if prev_edge is None else (getattr(channel.state, 'value', None) != getattr(prev_edge.dds[index].state, 'value', None))
-                    if state_changed:
+                                   
+                    if self.experiment.do_scan == True:
+                        lookup_names = {lookup_variable.name for lookup_variable in self.experiment.lookup_variables if lookup_variable.name != "None"}
+                        state_expression = str(channel.state.expression).strip()
+                        print(f"DEBUG: edge {edge_index}, channel {index}, state_expression = '{state_expression}'")
+                        
+                        if state_expression in lookup_names:
+                            file.write(indentation + f"if ({state_expression}) == 1:\n")
+                            file.write(indentation + "    " + f"self.urukul{urukul_num}_ch{channel_num}.sw.on()\n")
+                            file.write(indentation + "else:\n")
+                            file.write( indentation + "    " + f"self.urukul{urukul_num}_ch{channel_num}.sw.off()\n")
+                        elif state_changed:
+                            if getattr(channel.state, 'value', 0) == 1:
+                                file.write(indentation + "self.urukul" + str(urukul_num) + "_ch" + str(channel_num) + ".sw.on() \n")
+                            elif getattr(channel.state, 'value', 0) == 0:
+                                file.write(indentation + "self.urukul" + str(urukul_num) + "_ch" + str(channel_num) + ".sw.off() \n")
+                    elif state_changed:
                         if getattr(channel.state, 'value', 0) == 1:
                             file.write(indentation + "self.urukul" + str(urukul_num) + "_ch" + str(channel_num) + ".sw.on() \n")
                         else:
                             file.write(indentation + "self.urukul" + str(urukul_num) + "_ch" + str(channel_num) + ".sw.off() \n")
+                   
+                                                        
+                                       
 
                 if edge_index == 0:
                     file.write(indentation + "self.sampler0.init()\n")
@@ -736,9 +796,9 @@ def create_experiment(self, run_continuous = False, multiple_runs = False):
 
 
 
-    ##################################################################
-    ##################### RPC functions ##############################
-    ##################################################################
+    ################################################################################################
+    ######################################### RPC functions ########################################
+    ################################################################################################
     
     file.write("\n")
     indentation = indentation_kernel
