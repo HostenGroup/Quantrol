@@ -1646,7 +1646,7 @@ def handle_load_lookup_list_button_clicked(main_window):
             main_window.error_message("You can not modify dummy variable", "Wrong variable")
         else:
             loaded_file_path = QFileDialog.getOpenFileName(main_window, "Open File")[0]
-            loaded_file_name = loaded_file_path.split("/")[-1]
+            loaded_file_name = Path(loaded_file_path).name
             if loaded_file_path != "":
                 try:
                     lookup_variable.lookup_list = list(loadmat(loaded_file_path)['array'][0])
@@ -1654,6 +1654,10 @@ def handle_load_lookup_list_button_clicked(main_window):
                     main_window.update_off()
                     main_window.lookup_variables_table.item(row, 2).setText(loaded_file_name)
                     main_window.update_on()
+                    update.refresh_lookup_variables(main_window)
+                    update.digital_analog_dds_mirny_tabs(main_window)
+                    update.variable_tables(main_window)
+                    update.all_values(main_window)
                 except:
                     main_window.error_message('Could not load the file.', 'Error')
     except:

@@ -102,6 +102,52 @@ def _enforce_binary_state(channel_entry, channel_index, row, table_label):
         channel_entry.for_python = literal
     return None
 
+
+def refresh_lookup_variables(self):
+    """Sync lookup variable values from their current argument and lookup list."""
+    changed_lookup_names = set()
+    for lookup_variable in getattr(self.experiment, "lookup_variables", []):
+        if lookup_variable.name in ("", "None"):
+            continue
+        if not getattr(lookup_variable, "lookup_list", None):
+            continue
+
+        argument_name = str(getattr(lookup_variable, "argument", "")).strip()
+        if argument_name == "":
+            continue
+
+        argument_variable = self.experiment.variables.get(argument_name)
+        if argument_variable is None:
+            continue
+
+        try:
+            lookup_index = int(float(argument_variable.value))
+        except (TypeError, ValueError):
+            continue
+
+        if lookup_index < 0 or lookup_index >= len(lookup_variable.lookup_list):
+            continue
+
+        current_value = lookup_variable.lookup_list[lookup_index]
+        target_variable = self.experiment.variables.get(lookup_variable.name)
+        if target_variable is None:
+            continue
+
+        if target_variable.value != current_value or target_variable.for_python != current_value:
+            target_variable.value = current_value
+            target_variable.for_python = current_value
+            changed_lookup_names.add(lookup_variable.name)
+
+    if changed_lookup_names:
+        for edge in self.experiment.sequence:
+            for channel_group in (edge.digital, edge.analog, edge.dds, edge.mirny):
+                for channel in channel_group:
+                    expression = str(getattr(channel, "expression", ""))
+                    if any(re.search(rf"\\b{re.escape(name)}\\b", expression) for name in changed_lookup_names):
+                        channel.changed = True
+
+    return changed_lookup_names
+
 def sequence_tab(self):
     self.update_off()
     #Update expressions and evaluations   
@@ -637,6 +683,7 @@ def mirny_tab(self, update_expressions_and_evaluations = True, update_values_and
 def variables_tab(self, new_variables = True, derived_variables = True, lookup_variables = True):
     #creating the variables tab from self.experiment.new_variables object
     self.update_off()
+    refresh_lookup_variables(self)
     if new_variables:
         pass
     if derived_variables:
@@ -694,6 +741,7 @@ def digital_analog_dds_mirny_tabs(self, update_expressions_and_evaluations = Tru
     '''
     This function updates all tabs. It just calls an update of each tab one by one
     '''
+    refresh_lookup_variables(self)
     self._constant_derived_tooltips = {}
     sequence_tab_return = sequence_tab(self)
     if (sequence_tab_return==None):
@@ -1426,6 +1474,7 @@ def from_object(self):
 
 def all_values(self):
     self.update_off()
+    refresh_lookup_variables(self)
     self._constant_derived_tooltips = _compute_constant_derived_values(self)
     constant_tooltips = self._constant_derived_tooltips
     #Displaying SEQUENCE table and timing part of other tables

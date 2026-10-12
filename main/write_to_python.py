@@ -65,7 +65,9 @@ def create_experiment(self, run_continuous = False, multiple_runs = False):
     for index, lookup_variable in enumerate(self.experiment.lookup_variables):
         # We first save the lookup list and then load it from the python description of the experiment
         if lookup_variable.lookup_list_name != "":
-            temp_lookup_list_path = "./temp_lookup_variables/temp_%d_"%index +lookup_variable.lookup_list_name
+            lookup_list_name = os.path.basename(str(lookup_variable.lookup_list_name))
+            os.makedirs("./temp_lookup_variables", exist_ok=True)
+            temp_lookup_list_path = "./temp_lookup_variables/temp_%d_"%index + lookup_list_name
             savemat(temp_lookup_list_path, {'array':lookup_variable.lookup_list})
             file.write(indentation + "self.%s"%lookup_variable.name + " = list(loadmat('%s')['array'][0])\n"%temp_lookup_list_path)
     

@@ -1006,6 +1006,10 @@ def handle_lookup_variables_table_changed(main_window, item):
                     backup.name = table_item_text
                     variable.name = table_item_text
                     main_window.experiment.variables[backup.name] = backup
+                    update.refresh_lookup_variables(main_window)
+                    update.digital_analog_dds_mirny_tabs(main_window)
+                    update.variable_tables(main_window)
+                    update.all_values(main_window)
                 else:  # The previous variable was used and the name can not be changed
                     main_window.error_message("The variable is used in %s" % return_value, "Used variable")
                     main_window.experiment.variables[backup.name] = backup
@@ -1030,6 +1034,10 @@ def handle_lookup_variables_table_changed(main_window, item):
             else:
                 variable.argument = table_item_text
                 main_window.experiment.variables[variable.name].argument = table_item_text
+                update.refresh_lookup_variables(main_window)
+                update.digital_analog_dds_mirny_tabs(main_window)
+                update.variable_tables(main_window)
+                update.all_values(main_window)
 
 
 def handle_derived_variables_table_changed(main_window, item):
