@@ -1106,7 +1106,11 @@ class MainWindow(QMainWindow):
                         output_for_python += "%s" %current + text[index]
                         is_derived = True
                     elif variable.is_lookup: #if lookup assign the self.name[argument] 
-                        output_for_python += "self.%s[int(%s)]"%(current, self.experiment.variables[current].argument) + text[index]
+                        argument_name = str(getattr(self.experiment.variables[current], "argument", "")).strip()
+                        if argument_name != "":
+                            output_for_python += "self.%s[int(%s)]"%(current, argument_name) + text[index]
+                        else:
+                            output_for_python += "self.%s" % current + text[index]
                         is_lookup = True
                     else:
                         output_for_python += str(variable.value) + text[index]

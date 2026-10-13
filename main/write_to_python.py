@@ -207,9 +207,8 @@ def create_experiment(self, run_continuous = False, multiple_runs = False):
             argument_name = str(lookup_variable.argument).strip()
             step_name = scan_step_by_name.get(argument_name)
 
-            if step_name is None:
-                raise ValueError( f"Lookup variable '{lookup_variable.name}' uses " f"argument '{argument_name}', but that argument is " f"not a scanned variable.")
-            file.write(indentation + f"{lookup_variable.name} = " f"self.{lookup_variable.name}[{step_name}]\n")
+            if argument_name and step_name is not None:
+                file.write(indentation + f"{lookup_variable.name} = " f"self.{lookup_variable.name}[{step_name}]\n")
 
 
 
@@ -541,9 +540,8 @@ def create_experiment(self, run_continuous = False, multiple_runs = False):
                 argument_name = str(lookup_variable.argument).strip()
                 step_name = scan_step_by_name.get(argument_name)
 
-                if step_name is None:
-                    raise ValueError( f"Lookup variable '{lookup_variable.name}' uses " f"argument '{argument_name}', but that argument is " f"not a scanned variable.")
-                file.write(indentation + f"{lookup_variable.name} = " f"self.{lookup_variable.name}[{step_name}]\n")
+                if argument_name and step_name is not None:
+                    file.write(indentation + f"{lookup_variable.name} = " f"self.{lookup_variable.name}[{step_name}]\n")
 
 
         self.delta_t = 0 
